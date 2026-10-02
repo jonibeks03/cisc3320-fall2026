@@ -2,120 +2,105 @@ import os
 import shlex
 import signal
 
-job_list = {}
-next_job = 1
+jobs = {}
+jid = 1
 
 
-def update_jobs():
-    for job_id in list(job_list.keys()):
-        process_id = job_list[job_id]["pid"]
-
+def check():
+    while True:
         try:
-            finished, status = os.waitpid(process_id, os.WNOHANG)
+            pid, stat = os.waitpid(-1, os.WNOHANG)
 
-            if finished != 0:
-                job_list[job_id]["status"] = "Done"
+            if pid == 0:
+                break
+
+            for n in jobs:
+                if jobs[n]["pid"] == pid:
+                    jobs[n]["stat"] = "Done"
+                    break
 
         except ChildProcessError:
-            job_list[job_id]["status"] = "Done"
+            break
 
 
-def print_jobs():
-    for job_id in job_list:
-        print(
-            "[" + str(job_id) + "]",
-            job_list[job_id]["status"],
-            job_list[job_id]["command"]
-        )
+def show():
+    for n in jobs:
+        print("[" + str(n) + "]", jobs[n]["stat"], jobs[n]["cmd"])
 
 
-def start_command(command_parts, command_name, is_background):
-    global next_job
+def run(parts, cmd, bg):
+    global jid
 
-    process_id = os.fork()
+    pid = os.fork()
 
-    if process_id == 0:
+    if pid == 0:
         try:
-            os.execvp(command_parts[0], command_parts)
+            os.execvp(parts[0], parts)
 
         except FileNotFoundError:
-            print(
-                "myshell:",
-                command_parts[0],
-                ": command not found",
-                flush=True
-            )
+            print("command not found", flush=True)
             os._exit(1)
 
     else:
-        if is_background:
-
-            job_list[next_job] = {
-                "pid": process_id,
-                "command": command_name,
-                "status": "Running"
+        if bg:
+            jobs[jid] = {
+                "pid": pid,
+                "cmd": cmd,
+                "stat": "Running"
             }
 
-            print(
-                "[" + str(next_job) + "]",
-                process_id,
-                command_name
-            )
-
-            next_job = next_job + 1
+            print("[" + str(jid) + "]", pid, cmd)
+            jid = jid + 1
 
         else:
-            os.waitpid(process_id, 0)
+            os.waitpid(pid, 0)
 
 
-def move_to_foreground(job_id):
-
-    if job_id not in job_list:
-        print("myshell: job does not exist")
+def fg(n):
+    if n not in jobs:
+        print("job not found")
         return
 
-    print(job_list[job_id]["command"])
+    print(jobs[n]["cmd"])
 
-    process_id = job_list[job_id]["pid"]
+    if jobs[n]["stat"] == "Done":
+        del jobs[n]
+        return
+
+    pid = jobs[n]["pid"]
 
     try:
-        os.waitpid(process_id, 0)
-
+        os.waitpid(pid, 0)
     except ChildProcessError:
         pass
 
-    del job_list[job_id]
+    del jobs[n]
 
 
-def end_job(job_id):
-
-    if job_id not in job_list:
-        print("myshell: job does not exist")
+def stop(n):
+    if n not in jobs:
+        print("job not found")
         return
 
-    process_id = job_list[job_id]["pid"]
+    pid = jobs[n]["pid"]
 
     try:
-        os.kill(process_id, signal.SIGTERM)
-        os.waitpid(process_id, 0)
-
+        os.kill(pid, signal.SIGTERM)
+        os.waitpid(pid, 0)
     except:
         pass
 
-    print(
-        "[" + str(job_id) + "] Terminated",
-        job_list[job_id]["command"]
-    )
+    print("Terminated", jobs[n]["cmd"])
 
-    del job_list[job_id]
+    del jobs[n]
 
 
 while True:
 
-    update_jobs()
+    check()
 
     try:
-        command_line = input("myshell> ")
+        line = input("myshell> ")
 
     except KeyboardInterrupt:
         print()
@@ -124,85 +109,70 @@ while True:
     except EOFError:
         break
 
-    command_line = command_line.strip()
+    line = line.strip()
 
-    if command_line == "":
+    if line == "":
         continue
 
     try:
-        command_parts = shlex.split(command_line)
+        parts = shlex.split(line)
 
     except:
-        print("myshell: could not read command")
+        print("bad command")
         continue
 
-    is_background = False
+    bg = False
 
-    if command_parts[-1] == "&":
-        is_background = True
-        command_parts.pop()
+    if parts[-1] == "&":
+        bg = True
+        parts.pop()
 
-    if len(command_parts) == 0:
+    if len(parts) == 0:
         continue
 
-    command_name = " ".join(command_parts)
+    cmd = " ".join(parts)
 
-
-    if command_parts[0] == "exit":
+    if parts[0] == "exit":
         break
 
+    elif parts[0] == "cd":
 
-    elif command_parts[0] == "cd":
-
-        if len(command_parts) == 1:
+        if len(parts) == 1:
             os.chdir(os.environ["HOME"])
 
         else:
             try:
-                os.chdir(command_parts[1])
-
+                os.chdir(parts[1])
             except:
-                print("myshell: folder not found")
+                print("folder not found")
 
+    elif parts[0] == "jobs":
+        show()
 
-    elif command_parts[0] == "jobs":
+    elif parts[0] == "fg":
 
-        print_jobs()
-
-
-    elif command_parts[0] == "fg":
-
-        if len(command_parts) < 2:
-            print("myshell: enter job number")
+        if len(parts) < 2:
+            print("enter job number")
 
         else:
             try:
-                job_id = int(command_parts[1])
-                move_to_foreground(job_id)
-
+                n = int(parts[1])
+                fg(n)
             except:
-                print("myshell: invalid job number")
+                print("bad job number")
 
+    elif parts[0] == "kill":
 
-    elif command_parts[0] == "kill":
-
-        if len(command_parts) < 2:
-            print("myshell: enter job number")
+        if len(parts) < 2:
+            print("enter job number")
 
         else:
             try:
-                job_id = int(command_parts[1])
-                end_job(job_id)
-
+                n = int(parts[1])
+                stop(n)
             except:
-                print("myshell: invalid job number")
-
+                print("bad job number")
 
     else:
-
-        start_command(
-            command_parts,
-            command_name,
-            is_background
-        )
+        run(parts, cmd, bg)
 
